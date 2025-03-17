@@ -1,0 +1,163 @@
+/* Sidebar styles - right side with fixed header */
+.confluence-toc-sidebar {
+  position: fixed;
+  top: 0;
+  right: -300px; /* Start off-screen on the right */
+  left: auto; /* Reset left position */
+  width: 280px;
+  height: 100vh;
+  background-color: #fefefe;
+  border-left: 1px solid #ddd; /* Change to left border */
+  border-right: none; /* Remove right border */
+  box-shadow: -2px 0 10px rgba(0, 0, 0, 0.2); /* Flip shadow direction */
+  z-index: 9999;
+  transition: right 0.3s ease; /* Change transition property */
+  display: flex; /* Use flexbox for layout */
+  flex-direction: column; /* Stack children vertically */
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen,
+    Ubuntu, "Fira Sans", "Droid Sans", "Helvetica Neue", sans-serif;
+}
+
+.confluence-toc-sidebar.visible {
+  right: 0; /* Show on right side */
+  left: auto;
+}
+
+/* Header styles - improved contrast and fixed */
+.toc-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 15px;
+  background-color: #0052cc;
+  color: white;
+  border-bottom: 1px solid #0047b3;
+  flex-shrink: 0; /* Prevent header from shrinking */
+}
+
+.toc-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 500;
+  color: white !important; /* Ensure white text color */
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.3); /* Add subtle shadow for better readability */
+}
+
+.toc-close-btn {
+  background: none;
+  border: none;
+  color: white !important; /* Ensure white color */
+  font-size: 20px;
+  cursor: pointer;
+  padding: 0 5px;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.3); /* Add subtle shadow for better readability */
+}
+
+/* Content styles - scrollable */
+.toc-content {
+  padding: 10px 0;
+  overflow-y: auto; /* Make content area scrollable */
+  flex-grow: 1; /* Allow content to take remaining space */
+}
+
+.toc-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.toc-item {
+  padding: 0;
+  margin: 0;
+}
+
+/* Update TOC item links to show full title */
+.toc-item a,
+.toc-item a:visited {
+  display: block;
+  padding: 5px 15px;
+  color: #172b4d !important;
+  text-decoration: none !important;
+  font-size: 14px;
+  line-height: 1.5;
+  border-left: 3px solid transparent;
+  overflow: visible; /* Change from hidden to visible */
+  text-overflow: clip; /* Remove ellipsis */
+  white-space: normal; /* Allow text to wrap */
+  word-wrap: break-word; /* Break long words if needed */
+}
+
+.toc-item a:hover,
+.toc-item a:visited:hover {
+  background-color: #e6effc !important;
+  border-left-color: #0052cc !important;
+  color: #172b4d !important;
+}
+
+/* Active item highlight - with !important to ensure it's applied */
+.toc-item a.active,
+.toc-item a:visited.active {
+  background-color: #e6effc !important;
+  border-left-color: #0052cc !important;
+  font-weight: bold !important;
+  color: #0052cc !important;
+}
+
+/* Indentation for different heading levels */
+.toc-level-1 a {
+  font-weight: bold;
+}
+
+.toc-level-2 a {
+  padding-left: 25px;
+}
+
+.toc-level-3 a {
+  padding-left: 35px;
+}
+
+.toc-level-4 a {
+  padding-left: 45px;
+}
+
+.toc-level-5 a {
+  padding-left: 55px;
+}
+
+.toc-level-6 a {
+  padding-left: 65px;
+}
+
+/* Toggle button - right side */
+.toc-toggle-btn {
+  position: fixed;
+  top: 100px;
+  right: 0; /* Position on right */
+  left: auto; /* Reset left position */
+  width: 40px;
+  height: 40px;
+  background-color: #0052cc;
+  color: white;
+  border: none;
+  border-radius: 4px 0 0 4px; /* Flip border radius */
+  font-size: 24px;
+  cursor: pointer;
+  z-index: 9998;
+  box-shadow: -2px 0 10px rgba(0, 0, 0, 0.2); /* Flip shadow direction */
+  transition: right 0.3s ease; /* Change transition property */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.toc-toggle-btn.active {
+  right: 280px; /* Move with sidebar */
+  left: auto;
+}
+
+/* No items message */
+.toc-no-items {
+  padding: 10px 15px;
+  color: #6b778c;
+  font-style: italic;
+}
