@@ -12,6 +12,13 @@ let lastTocItemsHash = "";
 // 添加一個變數來保存上一次生成的 TOC 項目
 let previousTocItems = [];
 
+// 添加一個變數來追蹤是否正在進行程式控制的滾動
+let isProgrammaticScrolling = false;
+// 添加一個變數來保存點擊的項目索引
+let clickedItemIndex = -1;
+// 添加一個計時器變數
+let scrollEndTimer = null;
+
 // Throttle function to limit how often a function can be called
 function throttle(func, limit) {
   let inThrottle;
@@ -408,6 +415,17 @@ function renderTOC() {
       e.preventDefault();
       log(`Clicked TOC item: ${item.text} (${item.id})`);
 
+      // 設置正在進行程式控制的滾動標誌
+      isProgrammaticScrolling = true;
+      // 保存點擊的項目索引
+      const itemIndex = tocItems.findIndex((i) => i.id === item.id);
+      clickedItemIndex = itemIndex;
+
+      // 清除之前的計時器
+      if (scrollEndTimer) {
+        clearTimeout(scrollEndTimer);
+      }
+
       // Remove active class from all links
       sidebar
         .querySelectorAll(".toc-item a")
@@ -586,8 +604,20 @@ function renderTOC() {
           log(
             `Scrolled to ${item.id} with offset ${headerHeight + extraOffset}px`
           );
+
+          // 設置計時器，在滾動結束後重置標誌
+          // 滾動通常在 1000ms 內完成，我們設置稍長一點的時間
+          scrollEndTimer = setTimeout(() => {
+            isProgrammaticScrolling = false;
+            clickedItemIndex = -1;
+            // 滾動結束後強制更新高亮
+            highlightCurrentHeading();
+          }, 1500);
         } else {
           log(`Could not find element with ID ${item.id}`);
+          // 如果找不到元素，也要重置標誌
+          isProgrammaticScrolling = false;
+          clickedItemIndex = -1;
         }
       }
     });
@@ -661,6 +691,22 @@ function toggleSidebar() {
 function highlightCurrentHeading() {
   if (!sidebar || !tocItems.length) {
     log("Sidebar or TOC items not available for highlighting");
+    return;
+  }
+
+  // 如果正在進行程式控制的滾動，則保持點擊的項目高亮
+  if (isProgrammaticScrolling && clickedItemIndex >= 0) {
+    log("Skipping highlight update during programmatic scrolling");
+
+    // 確保點擊的項目保持高亮
+    const tocLinks = sidebar.querySelectorAll(".toc-item a");
+    if (tocLinks && tocLinks.length > clickedItemIndex) {
+      // 移除所有高亮
+      tocLinks.forEach((link) => link.classList.remove("active"));
+      // 高亮點擊的項目
+      tocLinks[clickedItemIndex].classList.add("active");
+    }
+
     return;
   }
 
