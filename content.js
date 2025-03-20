@@ -2,10 +2,62 @@
 let sidebarVisible = false;
 let sidebar = null;
 let tocItems = [];
+let debugMode = false; // 控制是否輸出日誌的變數
+
+// 添加一個變數來追蹤最後一次渲染的時間
+let lastRenderTime = 0;
+// 添加一個變數來追蹤最後一次渲染的內容
+let lastTocItemsHash = "";
+
+// 添加一個變數來保存上一次生成的 TOC 項目
+let previousTocItems = [];
+
+// Throttle function to limit how often a function can be called
+function throttle(func, limit) {
+  let inThrottle;
+  return function () {
+    const args = arguments;
+    const context = this;
+    if (!inThrottle) {
+      func.apply(context, args);
+      inThrottle = true;
+      setTimeout(() => (inThrottle = false), limit);
+    }
+  };
+}
+
+// 封裝的日誌函數
+function log(...args) {
+  if (debugMode) {
+    console.log(...args);
+  }
+}
+
+// 封裝的錯誤日誌函數
+function logError(...args) {
+  if (debugMode) {
+    console.error(...args);
+  }
+}
+
+// 添加一個函數來切換調試模式
+function toggleDebugMode() {
+  debugMode = !debugMode;
+  log(`Debug mode ${debugMode ? "enabled" : "disabled"}`);
+  return debugMode;
+}
+
+// 初始化時設置調試模式（可以從存儲中讀取）
+chrome.storage.local.get(["debugMode"], function (result) {
+  if (result.debugMode !== undefined) {
+    debugMode = result.debugMode;
+    log(`Debug mode initialized to ${debugMode}`);
+  }
+});
 
 // Initialize when the page is fully loaded
 window.addEventListener("load", () => {
-  console.log("Confluence TOC Extension loaded");
+  log("Confluence TOC Extension loaded");
   // Wait a bit longer for Confluence to fully render its content
   setTimeout(initTOC, 2500);
 });
@@ -13,8 +65,13 @@ window.addEventListener("load", () => {
 // Listen for messages from background script
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "toggleSidebar") {
-    console.log("Toggle sidebar message received");
+    log("Toggle sidebar message received");
     toggleSidebar();
+  } else if (request.action === "toggleDebug") {
+    const newState = toggleDebugMode();
+    // 保存調試模式狀態
+    chrome.storage.local.set({ debugMode: newState });
+    sendResponse({ debugMode: newState });
   }
   return true;
 });
@@ -50,26 +107,30 @@ function isEditMode() {
 
 // Initialize the TOC
 function initTOC() {
-  console.log("Initializing TOC");
+  log("Initializing TOC");
 
   // Check if we're on a Confluence page - use more flexible detection
   if (!isConfluencePage()) {
-    console.log("Not a Confluence page, extension will not run");
+    log("Not a Confluence page, extension will not run");
     return;
   }
 
   // 檢查是否處於編輯模式
   const editMode = isEditMode();
   if (editMode) {
-    console.log("Edit mode detected, using special initialization");
+    log("Edit mode detected, using special initialization");
   }
 
-  console.log("Confluence page detected");
+  log("Confluence page detected");
 
   // Create sidebar if it doesn't exist
   if (!sidebar) {
     createSidebar();
   }
+
+  // 重置渲染狀態，確保 TOC 會被渲染
+  lastRenderTime = 0;
+  lastTocItemsHash = "";
 
   // Generate TOC
   generateTOC();
@@ -79,7 +140,7 @@ function initTOC() {
 
   // Get saved sidebar state
   chrome.storage.local.get(["sidebarVisible"], function (result) {
-    console.log("Retrieved sidebar state:", result.sidebarVisible);
+    log("Retrieved sidebar state:", result.sidebarVisible);
 
     // If we have a saved state, use it; otherwise default to hidden (false)
     if (result.sidebarVisible === true) {
@@ -139,14 +200,9 @@ function createSidebar() {
   debugBtn.id = "toc-debug-button";
 
   debugBtn.addEventListener("click", () => {
-    console.log("Manual highlight refresh triggered");
-    const highlightFn = window.confluenceTocHighlightFn;
-    if (typeof highlightFn === "function") {
-      highlightFn();
-    } else {
-      console.log("Highlight function not found, re-initializing");
-      setupScrollHighlight();
-    }
+    log("Manual highlight refresh triggered");
+
+    highlightCurrentHeading();
   });
 
   debugContainer.appendChild(debugBtn);
@@ -171,15 +227,18 @@ function createSidebar() {
 
 // Generate TOC from page headings
 function generateTOC() {
-  // Clear previous TOC items
+  // 保存舊的 TOC 項目
+  previousTocItems = [...tocItems];
+
+  // 清除當前 TOC 項目
   tocItems = [];
 
-  console.log("Generating TOC");
+  log("Generating TOC");
 
   // 檢查是否處於編輯模式
   const editMode = isEditMode();
   if (editMode) {
-    console.log("Edit mode detected, using special TOC generation");
+    log("Edit mode detected, using special TOC generation");
   }
 
   // 根據是否處於編輯模式選擇不同的內容區域
@@ -204,15 +263,15 @@ function generateTOC() {
   }
 
   if (!contentArea) {
-    console.log("Could not find content area");
+    log("Could not find content area");
     return;
   }
 
-  console.log("Content area found:", contentArea);
+  log("Content area found:", contentArea);
 
   // 獲取所有標題
   const headings = contentArea.querySelectorAll("h1, h2, h3, h4, h5, h6");
-  console.log("Found headings:", headings.length);
+  log("Found headings:", headings.length);
 
   // 處理標題
   headings.forEach((heading, index) => {
@@ -246,11 +305,24 @@ function generateTOC() {
     }
 
     tocItems.push({ level, text, id, editMode, element: heading });
-    console.log(`Added heading: ${level} - ${text} (${id})`);
+    log(`Added heading: ${level} - ${text} (${id})`);
   });
 
-  // 渲染 TOC
-  renderTOC();
+  // 檢查 TOC 項目是否有變化
+  const oldHash = calculateTocItemsHash(previousTocItems);
+  const newHash = calculateTocItemsHash(tocItems);
+
+  // 檢查側邊欄內容是否為空
+  const content = sidebar?.querySelector(".toc-content");
+  const isEmpty = !content || content.children.length === 0;
+
+  // 如果內容有變化或側邊欄為空，則渲染 TOC
+  if (oldHash !== newHash || isEmpty) {
+    log("TOC items changed or sidebar is empty, rendering TOC");
+    renderTOC();
+  } else {
+    log("TOC items unchanged, skipping render");
+  }
 }
 
 // Generate an ID for a heading without one
@@ -266,34 +338,62 @@ function generateHeadingId(text, index) {
   );
 }
 
+// 計算 tocItems 的雜湊值，用於比較內容是否變化
+function calculateTocItemsHash(items) {
+  return items.map((item) => `${item.level}-${item.text}-${item.id}`).join("|");
+}
+
 // Render the TOC in the sidebar
 function renderTOC() {
   if (!sidebar) {
-    console.log("Cannot render TOC: sidebar not found");
+    log("Cannot render TOC: sidebar not found");
     return;
   }
 
   const content = sidebar.querySelector(".toc-content");
   if (!content) {
-    console.log("Cannot render TOC: content container not found");
+    log("Cannot render TOC: content container not found");
     return;
   }
 
+  // 計算當前時間和上次渲染的時間差
+  const now = Date.now();
+  const timeSinceLastRender = now - lastRenderTime;
+
+  // 計算當前 tocItems 的雜湊值
+  const currentHash = calculateTocItemsHash(tocItems);
+
+  // 如果距離上次渲染時間不足 200ms 且內容沒有變化，則跳過渲染
+  if (
+    timeSinceLastRender < 200 &&
+    currentHash === lastTocItemsHash &&
+    content.children.length > 0
+  ) {
+    log("Skipping TOC render: too soon or no content change");
+    return;
+  }
+
+  // 更新最後渲染時間和內容雜湊值
+  lastRenderTime = now;
+  lastTocItemsHash = currentHash;
+
+  log("Rendering TOC with", tocItems.length, "items");
   content.innerHTML = "";
-  console.log("Rendering TOC with", tocItems.length, "items");
 
   if (tocItems.length === 0) {
     const noItems = document.createElement("p");
     noItems.className = "toc-no-items";
     noItems.textContent = "No headings found on this page.";
     content.appendChild(noItems);
-    console.log("No TOC items to render");
+    log("No TOC items to render");
     return;
   }
 
+  // 創建 TOC 列表
   const list = document.createElement("ul");
   list.className = "toc-list";
 
+  // 添加 TOC 項目
   tocItems.forEach((item, index) => {
     const listItem = document.createElement("li");
     listItem.className = `toc-item toc-level-${item.level}`;
@@ -306,16 +406,16 @@ function renderTOC() {
 
     link.addEventListener("click", (e) => {
       e.preventDefault();
-      console.log(`Clicked TOC item: ${item.text} (${item.id})`);
+      log(`Clicked TOC item: ${item.text} (${item.id})`);
 
-      // 移除所有鏈接的 active 類
+      // Remove active class from all links
       sidebar
         .querySelectorAll(".toc-item a")
         .forEach((l) => l.classList.remove("active"));
 
-      // 為點擊的鏈接添加 active 類
+      // Add active class to clicked link
       link.classList.add("active");
-      console.log(`Added active class to ${item.text}`);
+      log(`Added active class to ${item.text}`);
 
       // 滾動到標題
       if (item.editMode) {
@@ -325,7 +425,7 @@ function renderTOC() {
 
         // 如果元素引用無效，嘗試通過文本內容和標籤名稱找到元素
         if (!targetElement || !document.body.contains(targetElement)) {
-          console.log(
+          log(
             "Stored element reference is invalid, trying to find element by content"
           );
 
@@ -349,10 +449,7 @@ function renderTOC() {
                 parseInt(heading.tagName.substring(1)) === item.level
               ) {
                 targetElement = heading;
-                console.log(
-                  "Found matching heading by content:",
-                  targetElement
-                );
+                log("Found matching heading by content:", targetElement);
                 break;
               }
             }
@@ -362,10 +459,7 @@ function renderTOC() {
               for (const heading of allHeadings) {
                 if (heading.textContent.trim() === item.text) {
                   targetElement = heading;
-                  console.log(
-                    "Found heading by text content only:",
-                    targetElement
-                  );
+                  log("Found heading by text content only:", targetElement);
                   break;
                 }
               }
@@ -379,7 +473,7 @@ function renderTOC() {
                 const index = parseInt(indexMatch[1]);
                 if (index < allHeadings.length) {
                   targetElement = allHeadings[index];
-                  console.log("Found heading by index:", index, targetElement);
+                  log("Found heading by index:", index, targetElement);
                 }
               }
             }
@@ -390,7 +484,7 @@ function renderTOC() {
         if (targetElement && document.body.contains(targetElement)) {
           // 獲取 Confluence 頭部的高度
           const headerHeight = getConfluenceHeaderHeight();
-          console.log(`Estimated header height: ${headerHeight}px`);
+          log(`Estimated header height: ${headerHeight}px`);
 
           // 增加額外的偏移量，確保標題不會被工具列擋住
           const extraOffset = 40;
@@ -419,16 +513,16 @@ function renderTOC() {
               window.scrollBy(0, -headerHeight - extraOffset);
             }, 100);
           } catch (e) {
-            console.error("Error focusing element:", e);
+            logError("Error focusing element:", e);
           }
 
-          console.log(
+          log(
             `Scrolled to heading in edit mode with offset ${
               headerHeight + extraOffset
             }px`
           );
         } else {
-          console.log(`Could not find element for heading in edit mode`);
+          log(`Could not find element for heading in edit mode`);
 
           // 後備方案：嘗試使用編輯器的 API（如果可用）
           try {
@@ -437,21 +531,21 @@ function renderTOC() {
               window.AP.confluence &&
               window.AP.confluence.editor
             ) {
-              console.log("Trying to use Confluence editor API");
+              log("Trying to use Confluence editor API");
               // 這是一個假設的 API 調用，實際的 API 可能不同
               window.AP.confluence.editor.scrollToText(item.text);
             }
           } catch (e) {
-            console.error("Error using editor API:", e);
+            logError("Error using editor API:", e);
           }
         }
       } else {
-        // 在閱讀模式下，使用 ID 滾動（保持不變）
+        // 在閱讀模式下，使用 ID 滾動
         const targetElement = document.getElementById(item.id);
         if (targetElement) {
           // 獲取 Confluence 頭部的高度
           const headerHeight = getConfluenceHeaderHeight();
-          console.log(`Estimated header height: ${headerHeight}px`);
+          log(`Estimated header height: ${headerHeight}px`);
 
           // 增加額外的偏移量，確保標題不會被工具列擋住
           const extraOffset = 40;
@@ -469,11 +563,11 @@ function renderTOC() {
             behavior: "smooth",
           });
 
-          console.log(
+          log(
             `Scrolled to ${item.id} with offset ${headerHeight + extraOffset}px`
           );
         } else {
-          console.log(`Could not find element with ID ${item.id}`);
+          log(`Could not find element with ID ${item.id}`);
         }
       }
     });
@@ -483,54 +577,11 @@ function renderTOC() {
   });
 
   content.appendChild(list);
-  console.log("TOC rendered successfully");
+  log("TOC rendered successfully");
 
-  // Re-highlight current heading after rendering
+  // Force a highlight check after rendering
   setTimeout(() => {
-    try {
-      const scrollPosition = window.scrollY + 150; // Increased offset
-      console.log("Current scroll position for highlight:", scrollPosition);
-
-      const headingElements = tocItems
-        .map((item) => document.getElementById(item.id))
-        .filter((el) => el !== null);
-
-      console.log(
-        "Found heading elements for highlight:",
-        headingElements.length
-      );
-
-      if (headingElements.length > 0) {
-        let currentHeadingIndex = -1;
-
-        for (let i = 0; i < headingElements.length; i++) {
-          const headingTop =
-            headingElements[i].getBoundingClientRect().top + window.scrollY;
-
-          console.log(`Heading ${i} position:`, headingTop);
-
-          if (scrollPosition >= headingTop) {
-            currentHeadingIndex = i;
-          } else {
-            break;
-          }
-        }
-
-        console.log("Current heading index:", currentHeadingIndex);
-
-        if (currentHeadingIndex !== -1) {
-          const tocLinks = sidebar.querySelectorAll(".toc-item a");
-          console.log("TOC links for highlight:", tocLinks.length);
-
-          if (currentHeadingIndex < tocLinks.length) {
-            tocLinks[currentHeadingIndex].classList.add("active");
-            console.log(`Highlighted TOC item ${currentHeadingIndex}`);
-          }
-        }
-      }
-    } catch (error) {
-      console.error("Error in TOC highlight:", error);
-    }
+    highlightCurrentHeading();
   }, 100);
 }
 
@@ -553,17 +604,17 @@ function getConfluenceHeaderHeight() {
   let totalHeight = 0;
   headers.forEach((header) => {
     totalHeight += header.offsetHeight || 0;
-    console.log(`Header element found with height: ${header.offsetHeight}px`);
+    log(`Header element found with height: ${header.offsetHeight}px`);
   });
 
   // 如果找到了頭部元素，返回總高度，否則返回默認值
   if (totalHeight > 0) {
-    console.log("Detected header elements with total height:", totalHeight);
+    log("Detected header elements with total height:", totalHeight);
     return totalHeight;
   }
 
   // 默認高度如果沒有找到頭部元素
-  console.log("No header elements detected, using default height");
+  log("No header elements detected, using default height");
   return 100; // 增加默認高度
 }
 
@@ -582,142 +633,131 @@ function toggleSidebar() {
 
   // Save state to Chrome storage
   chrome.storage.local.set({ sidebarVisible: sidebarVisible }, function () {
-    console.log("Saved sidebar state:", sidebarVisible);
+    log("Saved sidebar state:", sidebarVisible);
   });
+}
+
+// Function to highlight current heading
+function highlightCurrentHeading() {
+  if (!sidebar || !tocItems.length) {
+    log("Sidebar or TOC items not available for highlighting");
+    return;
+  }
+
+  try {
+    const scrollPosition = window.scrollY + 150; // Increased offset
+    log("Current scroll position for highlight:", scrollPosition);
+
+    // 檢查是否處於編輯模式
+    const editMode = isEditMode();
+
+    let headingElements;
+
+    if (editMode) {
+      // 在編輯模式下，使用元素引用
+      headingElements = tocItems
+        .filter((item) => item.element && document.body.contains(item.element))
+        .map((item) => item.element);
+    } else {
+      // 在閱讀模式下，使用 ID
+      headingElements = tocItems
+        .map((item) => document.getElementById(item.id))
+        .filter((el) => el !== null);
+    }
+
+    log("Found heading elements for highlight:", headingElements.length);
+
+    if (headingElements.length > 0) {
+      let currentHeadingIndex = -1;
+
+      for (let i = 0; i < headingElements.length; i++) {
+        const headingTop =
+          headingElements[i].getBoundingClientRect().top + window.scrollY;
+
+        // log(`Heading ${i} position:`, headingTop);
+
+        if (scrollPosition >= headingTop) {
+          currentHeadingIndex = i;
+        } else {
+          break;
+        }
+      }
+
+      log("Current heading index:", currentHeadingIndex);
+
+      const tocLinks = sidebar.querySelectorAll(".toc-item a");
+      if (!tocLinks || tocLinks.length === 0) {
+        log("No TOC links found in sidebar");
+        return;
+      }
+
+      // Remove active class from all TOC links
+      tocLinks.forEach((link) => {
+        link.classList.remove("active");
+      });
+      log("Removed active class from all links");
+
+      // Add active class to current heading's TOC link
+      if (currentHeadingIndex !== -1 && currentHeadingIndex < tocLinks.length) {
+        tocLinks[currentHeadingIndex].classList.add("active");
+        log(
+          `Added active class to link ${currentHeadingIndex} (${tocItems[currentHeadingIndex].text})`
+        );
+
+        // Scroll the sidebar to make the active item visible if needed
+        const activeLink = tocLinks[currentHeadingIndex];
+        const sidebarContent = sidebar.querySelector(".toc-content");
+
+        if (sidebarContent) {
+          const linkTop = activeLink.offsetTop;
+          const sidebarScrollTop = sidebarContent.scrollTop;
+          const sidebarHeight = sidebarContent.clientHeight;
+
+          log(
+            `Link top: ${linkTop}, Sidebar scroll: ${sidebarScrollTop}, Sidebar height: ${sidebarHeight}`
+          );
+
+          if (
+            linkTop < sidebarScrollTop ||
+            linkTop > sidebarScrollTop + sidebarHeight
+          ) {
+            sidebarContent.scrollTop = linkTop - sidebarHeight / 2;
+            log("Scrolled sidebar to show active link");
+          }
+        } else {
+          log("Could not find sidebar content element");
+        }
+      } else {
+        log(`Invalid current heading index: ${currentHeadingIndex}`);
+      }
+    }
+  } catch (error) {
+    logError("Error in TOC highlight:", error);
+  }
 }
 
 // Add scroll event listener to highlight current heading
 function setupScrollHighlight() {
-  console.log("Setting up scroll highlight");
-
-  // Function to highlight current heading
-  function highlightCurrentHeading() {
-    if (!sidebar || !tocItems.length) {
-      console.log("Sidebar or TOC items not available for highlighting");
-      return;
-    }
-
-    try {
-      const scrollPosition = window.scrollY + 150; // Increased offset
-      console.log("Current scroll position for highlight:", scrollPosition);
-
-      // 檢查是否處於編輯模式
-      const editMode = isEditMode();
-
-      let headingElements;
-
-      if (editMode) {
-        // 在編輯模式下，使用元素引用
-        headingElements = tocItems
-          .filter(
-            (item) => item.element && document.body.contains(item.element)
-          )
-          .map((item) => item.element);
-      } else {
-        // 在閱讀模式下，使用 ID
-        headingElements = tocItems
-          .map((item) => document.getElementById(item.id))
-          .filter((el) => el !== null);
-      }
-
-      console.log(
-        "Found heading elements for highlight:",
-        headingElements.length
-      );
-
-      if (headingElements.length > 0) {
-        let currentHeadingIndex = -1;
-
-        for (let i = 0; i < headingElements.length; i++) {
-          const headingTop =
-            headingElements[i].getBoundingClientRect().top + window.scrollY;
-
-          console.log(`Heading ${i} position:`, headingTop);
-
-          if (scrollPosition >= headingTop) {
-            currentHeadingIndex = i;
-          } else {
-            break;
-          }
-        }
-
-        console.log("Current heading index:", currentHeadingIndex);
-
-        const tocLinks = sidebar.querySelectorAll(".toc-item a");
-        if (!tocLinks || tocLinks.length === 0) {
-          console.log("No TOC links found in sidebar");
-          return;
-        }
-
-        // Remove active class from all TOC links
-        tocLinks.forEach((link) => {
-          link.classList.remove("active");
-        });
-        console.log("Removed active class from all links");
-
-        // Add active class to current heading's TOC link
-        if (
-          currentHeadingIndex !== -1 &&
-          currentHeadingIndex < tocLinks.length
-        ) {
-          tocLinks[currentHeadingIndex].classList.add("active");
-          console.log(
-            `Added active class to link ${currentHeadingIndex} (${tocItems[currentHeadingIndex].text})`
-          );
-
-          // Scroll the sidebar to make the active item visible if needed
-          const activeLink = tocLinks[currentHeadingIndex];
-          const sidebarContent = sidebar.querySelector(".toc-content");
-
-          if (sidebarContent) {
-            const linkTop = activeLink.offsetTop;
-            const sidebarScrollTop = sidebarContent.scrollTop;
-            const sidebarHeight = sidebarContent.clientHeight;
-
-            console.log(
-              `Link top: ${linkTop}, Sidebar scroll: ${sidebarScrollTop}, Sidebar height: ${sidebarHeight}`
-            );
-
-            if (
-              linkTop < sidebarScrollTop ||
-              linkTop > sidebarScrollTop + sidebarHeight
-            ) {
-              sidebarContent.scrollTop = linkTop - sidebarHeight / 2;
-              console.log("Scrolled sidebar to show active link");
-            }
-          } else {
-            console.log("Could not find sidebar content element");
-          }
-        } else {
-          console.log(`Invalid current heading index: ${currentHeadingIndex}`);
-        }
-      }
-    } catch (error) {
-      console.error("Error in TOC highlight:", error);
-    }
-  }
-
-  // Save reference to highlight function for debugging
-  window.confluenceTocHighlightFn = highlightCurrentHeading;
+  log("Setting up scroll highlight");
 
   // Throttled scroll handler
   const throttledHighlight = throttle(highlightCurrentHeading, 100);
 
   // Add scroll event listener
   window.addEventListener("scroll", throttledHighlight);
-  console.log("Added scroll event listener");
+  log("Added scroll event listener");
 
   // Initial highlight
   setTimeout(highlightCurrentHeading, 500);
-  console.log("Scheduled initial highlight");
+  log("Scheduled initial highlight");
 
   // Also highlight on window resize
   window.addEventListener("resize", throttledHighlight);
-  console.log("Added resize event listener");
+  log("Added resize event listener");
 
   // Force a highlight check every 2 seconds in case of dynamic content changes
-  setInterval(highlightCurrentHeading, 2000);
-  console.log("Set up periodic highlight check");
+  setInterval(highlightCurrentHeading, 5000);
+  log("Set up periodic highlight check");
 }
 
 // Re-generate TOC when page content changes
@@ -748,6 +788,9 @@ function observeContentChanges() {
 
   if (!contentArea) return;
 
+  // 添加防抖動處理，避免短時間內多次觸發
+  let regenerateTimeout = null;
+
   const observer = new MutationObserver((mutations) => {
     // 檢查變化是否影響標題
     const shouldRegenerate = mutations.some((mutation) => {
@@ -759,7 +802,17 @@ function observeContentChanges() {
     });
 
     if (shouldRegenerate) {
-      generateTOC();
+      // 清除之前的計時器
+      if (regenerateTimeout) {
+        clearTimeout(regenerateTimeout);
+      }
+
+      // 設置新的計時器，延遲 500ms 執行
+      regenerateTimeout = setTimeout(() => {
+        log("Content changed, regenerating TOC");
+        generateTOC();
+        regenerateTimeout = null;
+      }, 500);
     }
   });
 
@@ -779,10 +832,10 @@ new MutationObserver(() => {
   const url = location.href;
   if (url !== lastUrl) {
     lastUrl = url;
-    console.log("URL changed to", url);
+    log("URL changed to", url);
 
     // 無論是切換到編輯模式還是閱讀模式，都重新初始化 TOC
-    console.log("URL changed, reinitializing TOC");
+    log("URL changed, reinitializing TOC");
 
     // 如果側邊欄已經存在，先移除它
     if (sidebar && sidebar.parentNode) {
