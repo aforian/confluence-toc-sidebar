@@ -417,6 +417,26 @@ function renderTOC() {
       link.classList.add("active");
       log(`Added active class to ${item.text}`);
 
+      // 手動處理側邊欄滾動，確保點擊的項目可見
+      const sidebarContent = sidebar.querySelector(".toc-content");
+      if (sidebarContent) {
+        const linkTop = link.offsetTop;
+        const sidebarScrollTop = sidebarContent.scrollTop;
+        const sidebarHeight = sidebarContent.clientHeight;
+
+        log(
+          `Link top: ${linkTop}, Sidebar scroll: ${sidebarScrollTop}, Sidebar height: ${sidebarHeight}`
+        );
+
+        if (
+          linkTop < sidebarScrollTop ||
+          linkTop > sidebarScrollTop + sidebarHeight
+        ) {
+          sidebarContent.scrollTop = linkTop - sidebarHeight / 2;
+          log("Scrolled sidebar to show active link");
+        }
+      }
+
       // 滾動到標題
       if (item.editMode) {
         // 在編輯模式下，使用更可靠的方法找到元素
@@ -699,33 +719,38 @@ function highlightCurrentHeading() {
 
       // Add active class to current heading's TOC link
       if (currentHeadingIndex !== -1 && currentHeadingIndex < tocLinks.length) {
-        tocLinks[currentHeadingIndex].classList.add("active");
+        const activeLink = tocLinks[currentHeadingIndex];
+        activeLink.classList.add("active");
         log(
           `Added active class to link ${currentHeadingIndex} (${tocItems[currentHeadingIndex].text})`
         );
 
-        // Scroll the sidebar to make the active item visible if needed
-        const activeLink = tocLinks[currentHeadingIndex];
-        const sidebarContent = sidebar.querySelector(".toc-content");
+        // 添加自動滾動側邊欄的功能，但使用平滑的動畫效果
+        // 並且只有在側邊欄可見時才滾動
+        if (sidebarVisible) {
+          const sidebarContent = sidebar.querySelector(".toc-content");
+          if (sidebarContent) {
+            const linkTop = activeLink.offsetTop;
+            const sidebarScrollTop = sidebarContent.scrollTop;
+            const sidebarHeight = sidebarContent.clientHeight;
 
-        if (sidebarContent) {
-          const linkTop = activeLink.offsetTop;
-          const sidebarScrollTop = sidebarContent.scrollTop;
-          const sidebarHeight = sidebarContent.clientHeight;
+            // 檢查當前高亮項目是否在可視區域內
+            const isVisible =
+              linkTop >= sidebarScrollTop &&
+              linkTop <= sidebarScrollTop + sidebarHeight;
 
-          log(
-            `Link top: ${linkTop}, Sidebar scroll: ${sidebarScrollTop}, Sidebar height: ${sidebarHeight}`
-          );
-
-          if (
-            linkTop < sidebarScrollTop ||
-            linkTop > sidebarScrollTop + sidebarHeight
-          ) {
-            sidebarContent.scrollTop = linkTop - sidebarHeight / 2;
-            log("Scrolled sidebar to show active link");
+            // 如果不在可視區域內，則平滑滾動到該項目
+            if (!isVisible) {
+              // 使用平滑滾動效果
+              sidebarContent.scrollTo({
+                top: linkTop - sidebarHeight / 2,
+                behavior: "smooth",
+              });
+              log("Auto-scrolled sidebar to show active link");
+            }
+          } else {
+            log("Could not find sidebar content element");
           }
-        } else {
-          log("Could not find sidebar content element");
         }
       } else {
         log(`Invalid current heading index: ${currentHeadingIndex}`);
